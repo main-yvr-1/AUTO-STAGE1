@@ -1,16 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Statistic, Progress, List, Button, Typography, Space, Alert, Spin } from 'antd';
+import { Card, Row, Col, Statistic, Progress, List, Button, Typography, Alert, Spin } from 'antd';
 import { 
   ProjectOutlined, 
-  DatabaseOutlined, 
   PictureOutlined, 
-  TagOutlined,
   PlayCircleOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   ReloadOutlined,
   RobotOutlined,
-  EditOutlined,
   PlusOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -24,7 +21,6 @@ const Dashboard = () => {
   const [backendStatus, setBackendStatus] = useState({ available: false });
   const [stats, setStats] = useState({
     totalProjects: 0,
-    totalDatasets: 0,
     totalImages: 0,
     labeledImages: 0,
     modelsAvailable: 0,
@@ -57,13 +53,11 @@ const Dashboard = () => {
 
       // Calculate statistics from projects data
       const totalProjects = projectsData.length;
-      const totalDatasets = projectsData.reduce((sum, project) => sum + project.total_datasets, 0);
       const totalImages = projectsData.reduce((sum, project) => sum + project.total_images, 0);
       const labeledImages = projectsData.reduce((sum, project) => sum + project.labeled_images, 0);
 
       setStats({
         totalProjects,
-        totalDatasets,
         totalImages,
         labeledImages,
         modelsAvailable: modelsData.length,
@@ -157,7 +151,7 @@ const Dashboard = () => {
       
       {/* Statistics Cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card>
             <Statistic
               title="Models"
@@ -167,7 +161,7 @@ const Dashboard = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card>
             <Statistic
               title="Projects"
@@ -177,17 +171,7 @@ const Dashboard = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Datasets"
-              value={stats.totalDatasets}
-              prefix={<DatabaseOutlined />}
-              valueStyle={{ color: '#722ed1' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={8}>
           <Card>
             <Statistic
               title="Total Images"
@@ -283,7 +267,7 @@ const Dashboard = () => {
                       <List.Item.Meta
                         avatar={<ProjectOutlined style={{ fontSize: '20px', color: '#1890ff' }} />}
                         title={project.name}
-                        description={`${project.total_datasets} datasets • ${project.total_images} images`}
+                        description={`${project.total_images} images • ${project.type || 'Object Detection'}`}
                       />
                       <div style={{ minWidth: '120px' }}>
                         <Progress percent={progress} size="small" />
@@ -312,13 +296,6 @@ const Dashboard = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <Button 
                 type="primary" 
-                icon={<RobotOutlined />}
-                onClick={() => navigate('/models')}
-                block
-              >
-                Import YOLO Model
-              </Button>
-              <Button 
                 icon={<ProjectOutlined />}
                 onClick={() => navigate('/projects')}
                 block
@@ -326,18 +303,11 @@ const Dashboard = () => {
                 Create New Project
               </Button>
               <Button 
-                icon={<DatabaseOutlined />}
-                onClick={() => navigate('/datasets')}
+                icon={<RobotOutlined />}
+                onClick={() => navigate('/models')}
                 block
               >
-                Upload Dataset
-              </Button>
-              <Button 
-                icon={<EditOutlined />}
-                onClick={() => navigate('/annotate')}
-                block
-              >
-                Start Annotating
+                Manage Models
               </Button>
             </div>
           </Card>

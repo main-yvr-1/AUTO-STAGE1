@@ -4,10 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   DashboardOutlined,
   RobotOutlined,
-  ProjectOutlined,
-  DatabaseOutlined,
-  EditOutlined,
-  BulbOutlined
+  ProjectOutlined
 } from '@ant-design/icons';
 
 const Navbar = () => {
@@ -29,21 +26,6 @@ const Navbar = () => {
       key: '/projects',
       icon: <ProjectOutlined />,
       label: 'Projects',
-    },
-    {
-      key: '/datasets',
-      icon: <DatabaseOutlined />,
-      label: 'Datasets',
-    },
-    {
-      key: '/annotate',
-      icon: <EditOutlined />,
-      label: 'Annotate',
-    },
-    {
-      key: '/active-learning',
-      icon: <BulbOutlined />,
-      label: 'Active Learning',
     },
   ];
 

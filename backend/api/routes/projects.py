@@ -932,8 +932,13 @@ async def upload_images_to_project(
         except json.JSONDecodeError:
             tags_list = []
         
-        # Create or get default dataset for this project
-        default_dataset_name = batch_name or f"Uploaded Images - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        # Determine dataset name: use selected tag (existing dataset) or batch_name (new dataset)
+        if tags_list and len(tags_list) > 0:
+            # User selected existing dataset from tags dropdown
+            default_dataset_name = tags_list[0]  # Use first selected tag as dataset name
+        else:
+            # User entered new batch name or fallback to default
+            default_dataset_name = batch_name or f"Uploaded Images - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         # Create project and dataset upload directories
         project_upload_dir = os.path.join("..", "uploads", project.name)
@@ -1018,6 +1023,142 @@ async def upload_images_to_project(
             except:
                 pass
         raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
+
+
+@router.post("/{project_id}/upload-bulk")
+async def upload_multiple_images_to_project(
+    project_id: str,
+    files: List[UploadFile] = File(...),
+    batch_name: str = Form(None),
+    tags: str = Form("[]"),
+    db: Session = Depends(get_db)
+):
+    """Upload multiple images to a project"""
+    try:
+        # Check if project exists
+        project = ProjectOperations.get_project(db, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Parse tags
+        try:
+            tags_list = json.loads(tags) if tags else []
+        except json.JSONDecodeError:
+            tags_list = []
+        
+        # Determine dataset name: use selected tag (existing dataset) or batch_name (new dataset)
+        if tags_list and len(tags_list) > 0:
+            # User selected existing dataset from tags dropdown
+            default_dataset_name = tags_list[0]  # Use first selected tag as dataset name
+        else:
+            # User entered new batch name or fallback to default
+            default_dataset_name = batch_name or f"Uploaded Images - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        
+        # Create project and dataset upload directories
+        project_upload_dir = os.path.join("..", "uploads", project.name)
+        dataset_upload_dir = os.path.join(project_upload_dir, default_dataset_name)
+        os.makedirs(dataset_upload_dir, exist_ok=True)
+        
+        # Check if dataset with this name already exists
+        existing_datasets = DatasetOperations.get_datasets_by_project(db, project_id)
+        target_dataset = None
+        for dataset in existing_datasets:
+            if dataset.name == default_dataset_name:
+                target_dataset = dataset
+                break
+        
+        # Create new dataset if not found
+        if not target_dataset:
+            target_dataset = DatasetOperations.create_dataset(
+                db=db,
+                name=default_dataset_name,
+                description=f"Images uploaded to {project.name}",
+                project_id=project_id
+            )
+        
+        # Process all files
+        results = {
+            'total_files': len(files),
+            'successful_uploads': 0,
+            'failed_uploads': 0,
+            'uploaded_images': [],
+            'errors': []
+        }
+        
+        for file in files:
+            try:
+                # Validate file type
+                if not file.content_type or not file.content_type.startswith('image/'):
+                    results['errors'].append(f"File {file.filename} is not an image")
+                    results['failed_uploads'] += 1
+                    continue
+                
+                # Generate unique filename
+                file_extension = os.path.splitext(file.filename)[1].lower()
+                unique_filename = f"{uuid.uuid4()}{file_extension}"
+                file_path = os.path.join(dataset_upload_dir, unique_filename)
+                
+                # Read and validate image
+                contents = await file.read()
+                try:
+                    image = Image.open(io.BytesIO(contents))
+                    width, height = image.size
+                    image_format = image.format
+                except Exception as e:
+                    results['errors'].append(f"Invalid image file {file.filename}: {str(e)}")
+                    results['failed_uploads'] += 1
+                    continue
+                
+                # Save file
+                with open(file_path, "wb") as f:
+                    f.write(contents)
+                
+                # Create image record in database
+                image_record = ImageOperations.create_image(
+                    db=db,
+                    filename=unique_filename,
+                    original_filename=file.filename,
+                    file_path=file_path,
+                    dataset_id=target_dataset.id,
+                    width=width,
+                    height=height,
+                    file_size=len(contents),
+                    format=image_format
+                )
+                
+                results['uploaded_images'].append({
+                    'id': image_record.id,
+                    'filename': image_record.filename,
+                    'original_filename': image_record.original_filename,
+                    'width': image_record.width,
+                    'height': image_record.height,
+                    'file_size': image_record.file_size
+                })
+                
+                results['successful_uploads'] += 1
+                
+            except Exception as e:
+                error_msg = f"Failed to upload {file.filename}: {str(e)}"
+                results['errors'].append(error_msg)
+                results['failed_uploads'] += 1
+        
+        # Update dataset statistics
+        DatasetOperations.update_dataset_stats(db, target_dataset.id)
+        
+        return {
+            "success": True,
+            "message": f"Successfully uploaded {results['successful_uploads']} of {results['total_files']} files",
+            "dataset_id": target_dataset.id,
+            "dataset_name": target_dataset.name,
+            "tags": tags_list,
+            "batch_name": default_dataset_name,
+            "results": results
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload images: {str(e)}")
 
 
 @router.get("/{project_id}/images")
