@@ -427,11 +427,50 @@ async def assign_dataset_to_annotating(project_id: str, dataset_id: str, db: Ses
         if not dataset or dataset.project_id != int(project_id):
             raise HTTPException(status_code=404, detail="Dataset not found")
         
+        # Move physical files to annotating (from unassigned or dataset folder)
+        project_folder = os.path.join("..", "uploads", "projects", project.name)
+        unassigned_folder = os.path.join(project_folder, "unassigned", dataset.name)
+        dataset_folder = os.path.join(project_folder, "dataset", dataset.name)
+        annotating_folder = os.path.join(project_folder, "annotating", dataset.name)
+        
+        # Check if dataset is in unassigned folder
+        if os.path.exists(unassigned_folder):
+            # Create annotating directory if it doesn't exist
+            os.makedirs(os.path.dirname(annotating_folder), exist_ok=True)
+            
+            # Move the entire dataset folder
+            shutil.move(unassigned_folder, annotating_folder)
+            print(f"Moved dataset folder: {unassigned_folder} -> {annotating_folder}")
+            
+            # Update file paths in database
+            images = ImageOperations.get_images_by_dataset(db, dataset_id, skip=0, limit=10000)
+            for image in images:
+                old_path = image.file_path
+                new_path = old_path.replace("/unassigned/", "/annotating/")
+                ImageOperations.update_image_path(db, image.id, new_path)
+                print(f"Updated image path: {old_path} -> {new_path}")
+        
+        # Check if dataset is in dataset folder (completed datasets)
+        elif os.path.exists(dataset_folder):
+            # Create annotating directory if it doesn't exist
+            os.makedirs(os.path.dirname(annotating_folder), exist_ok=True)
+            
+            # Move the entire dataset folder
+            shutil.move(dataset_folder, annotating_folder)
+            print(f"Moved dataset folder: {dataset_folder} -> {annotating_folder}")
+            
+            # Update file paths in database
+            images = ImageOperations.get_images_by_dataset(db, dataset_id, skip=0, limit=10000)
+            for image in images:
+                old_path = image.file_path
+                new_path = old_path.replace("/dataset/", "/annotating/")
+                ImageOperations.update_image_path(db, image.id, new_path)
+                print(f"Updated image path: {old_path} -> {new_path}")
+        
         # Update dataset to show it's being annotated
-        # Set labeled_images to 1 if it's currently 0 (to move from Unassigned to Annotating)
+        # Handle both unassigned (labeled_images = 0) and completed (labeled_images = total_images) datasets
         if dataset.labeled_images == 0 and dataset.total_images > 0:
-            # Update labeled_images to 1 to indicate annotation work has started
-            # This will move the dataset from "Unassigned" to "Annotating" section
+            # Moving from Unassigned to Annotating
             update_result = DatasetOperations.update_dataset(
                 db, 
                 dataset_id, 
@@ -443,6 +482,20 @@ async def assign_dataset_to_annotating(project_id: str, dataset_id: str, db: Ses
                 raise HTTPException(status_code=500, detail="Failed to update dataset status")
             
             print(f"DEBUG: Dataset '{dataset.name}' assigned to annotating - labeled_images updated from 0 to 1")
+        
+        elif dataset.labeled_images == dataset.total_images and dataset.total_images > 0:
+            # Moving from Completed to Annotating (set to partially annotated)
+            update_result = DatasetOperations.update_dataset(
+                db, 
+                dataset_id, 
+                labeled_images=dataset.total_images - 1,
+                unlabeled_images=1
+            )
+            
+            if not update_result:
+                raise HTTPException(status_code=500, detail="Failed to update dataset status")
+            
+            print(f"DEBUG: Dataset '{dataset.name}' moved from completed to annotating - labeled_images updated from {dataset.total_images} to {dataset.total_images - 1}")
         
         return {
             "success": True,
@@ -568,6 +621,57 @@ async def delete_dataset(project_id: str, dataset_id: str, db: Session = Depends
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete dataset: {str(e)}")
+
+
+@router.delete("/{project_id}/clear-data")
+async def clear_project_data(project_id: str, db: Session = Depends(get_db)):
+    """Clear all data (datasets and images) from a project"""
+    try:
+        # Check if project exists
+        project = ProjectOperations.get_project(db, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get all datasets for this project
+        datasets = DatasetOperations.get_datasets_by_project(db, project_id)
+        
+        # Delete all datasets and their images
+        for dataset in datasets:
+            try:
+                # Delete dataset from database (this should cascade to delete images)
+                DatasetOperations.delete_dataset(db, str(dataset.id))
+                
+                # Delete dataset folder
+                dataset_folder_path = os.path.join("..", "uploads", project.name, dataset.name)
+                if os.path.exists(dataset_folder_path):
+                    shutil.rmtree(dataset_folder_path)
+                    print(f"Deleted dataset folder: {dataset_folder_path}")
+                    
+            except Exception as dataset_error:
+                print(f"Warning: Failed to delete dataset {dataset.name}: {str(dataset_error)}")
+                # Continue with other datasets
+        
+        # Also delete any loose images in the project folder
+        try:
+            project_folder_path = os.path.join("..", "uploads", project.name)
+            if os.path.exists(project_folder_path):
+                # Remove all files and subdirectories, then recreate the empty folder
+                shutil.rmtree(project_folder_path)
+                os.makedirs(project_folder_path, exist_ok=True)
+                print(f"Cleared project folder: {project_folder_path}")
+        except Exception as folder_error:
+            print(f"Warning: Failed to clear project folder: {str(folder_error)}")
+        
+        return {
+            "success": True,
+            "message": f"All data cleared from project '{project.name}'",
+            "project_id": project_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear project data: {str(e)}")
 
 
 @router.post("/{project_id}/duplicate", response_model=ProjectResponse)
@@ -941,14 +1045,14 @@ async def upload_images_to_project(
             default_dataset_name = batch_name or f"Uploaded Images - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         # Create project and dataset upload directories
-        project_upload_dir = os.path.join("..", "uploads", project.name)
-        dataset_upload_dir = os.path.join(project_upload_dir, default_dataset_name)
+        project_upload_dir = os.path.join("..", "uploads", "projects", project.name)
+        dataset_upload_dir = os.path.join(project_upload_dir, "unassigned", default_dataset_name)
         os.makedirs(dataset_upload_dir, exist_ok=True)
         
-        # Generate unique filename
-        file_extension = os.path.splitext(file.filename)[1].lower()
-        unique_filename = f"{uuid.uuid4()}{file_extension}"
-        file_path = os.path.join(dataset_upload_dir, unique_filename)
+        # Use original filename (sanitized)
+        import re
+        safe_filename = re.sub(r'[^\w\-_\.]', '_', file.filename)
+        file_path = os.path.join(dataset_upload_dir, safe_filename)
         
         # Read and validate image
         contents = await file.read()
@@ -983,7 +1087,7 @@ async def upload_images_to_project(
         # Create image record in database
         image_record = ImageOperations.create_image(
             db=db,
-            filename=unique_filename,
+            filename=safe_filename,
             original_filename=file.filename,
             file_path=file_path,
             dataset_id=target_dataset.id,
@@ -1055,8 +1159,8 @@ async def upload_multiple_images_to_project(
             default_dataset_name = batch_name or f"Uploaded Images - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         # Create project and dataset upload directories
-        project_upload_dir = os.path.join("..", "uploads", project.name)
-        dataset_upload_dir = os.path.join(project_upload_dir, default_dataset_name)
+        project_upload_dir = os.path.join("..", "uploads", "projects", project.name)
+        dataset_upload_dir = os.path.join(project_upload_dir, "unassigned", default_dataset_name)
         os.makedirs(dataset_upload_dir, exist_ok=True)
         
         # Check if dataset with this name already exists
@@ -1093,10 +1197,10 @@ async def upload_multiple_images_to_project(
                     results['failed_uploads'] += 1
                     continue
                 
-                # Generate unique filename
-                file_extension = os.path.splitext(file.filename)[1].lower()
-                unique_filename = f"{uuid.uuid4()}{file_extension}"
-                file_path = os.path.join(dataset_upload_dir, unique_filename)
+                # Use original filename (sanitized)
+                import re
+                safe_filename = re.sub(r'[^\w\-_\.]', '_', file.filename)
+                file_path = os.path.join(dataset_upload_dir, safe_filename)
                 
                 # Read and validate image
                 contents = await file.read()
@@ -1116,7 +1220,7 @@ async def upload_multiple_images_to_project(
                 # Create image record in database
                 image_record = ImageOperations.create_image(
                     db=db,
-                    filename=unique_filename,
+                    filename=safe_filename,
                     original_filename=file.filename,
                     file_path=file_path,
                     dataset_id=target_dataset.id,
@@ -1235,7 +1339,7 @@ async def move_dataset_to_unassigned(
             raise HTTPException(status_code=404, detail="Dataset not found")
         
         # Move physical files from annotating to unassigned
-        project_folder = os.path.join("uploads", "projects", project.name)
+        project_folder = os.path.join("..", "uploads", "projects", project.name)
         annotating_folder = os.path.join(project_folder, "annotating", dataset.name)
         unassigned_folder = os.path.join(project_folder, "unassigned", dataset.name)
         
@@ -1290,7 +1394,7 @@ async def move_dataset_to_completed(
             raise HTTPException(status_code=404, detail="Dataset not found")
         
         # Move physical files from annotating to dataset
-        project_folder = os.path.join("uploads", "projects", project.name)
+        project_folder = os.path.join("..", "uploads", "projects", project.name)
         annotating_folder = os.path.join(project_folder, "annotating", dataset.name)
         dataset_folder = os.path.join(project_folder, "dataset", dataset.name)
         

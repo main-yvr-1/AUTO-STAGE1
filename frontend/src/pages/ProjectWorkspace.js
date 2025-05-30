@@ -254,23 +254,49 @@ const ProjectWorkspace = () => {
     }
   };
 
-  const handleDeleteDataset = async (dataset) => {
+  const handleDeleteDataset = async (dataset = null) => {
+    // If no dataset provided, delete all project data
+    const title = dataset ? 'Delete Dataset' : 'Delete All Project Data';
+    const content = dataset 
+      ? `Are you sure you want to delete "${dataset.name}"? This action cannot be undone.`
+      : `Are you sure you want to delete all images and data for this project? This action cannot be undone.`;
+    
     Modal.confirm({
-      title: 'Delete Dataset',
-      content: `Are you sure you want to delete "${dataset.name}"? This action cannot be undone.`,
+      title,
+      content,
       okText: 'Delete',
       okType: 'danger',
       cancelText: 'Cancel',
       onOk: async () => {
         try {
-          await projectsAPI.deleteProjectDataset(projectId, dataset.id);
-          message.success(`Dataset "${dataset.name}" deleted successfully`);
+          if (dataset) {
+            await projectsAPI.deleteProjectDataset(projectId, dataset.id);
+            message.success(`Dataset "${dataset.name}" deleted successfully`);
+          } else {
+            // Delete all project data
+            const response = await fetch(`/api/v1/projects/${projectId}/clear-data`, {
+              method: 'DELETE',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+              }
+            });
+            
+            if (response.ok) {
+              message.success('All project data deleted successfully');
+              // Reload project data to reflect changes
+              loadProject();
+            } else {
+              const errorData = await response.json();
+              throw new Error(errorData.detail || 'Failed to delete project data');
+            }
+          }
           // Reload management data to reflect changes
           loadManagementData();
         } catch (error) {
           const errorInfo = handleAPIError(error);
-          message.error(`Failed to delete dataset: ${errorInfo.message}`);
-          console.error('Delete dataset error:', error);
+          message.error(`Failed to delete: ${errorInfo.message}`);
+          console.error('Delete error:', error);
         }
       }
     });
@@ -304,6 +330,18 @@ const ProjectWorkspace = () => {
       const errorInfo = handleAPIError(error);
       message.error(`Failed to move dataset: ${errorInfo.message}`);
       console.error('Move to dataset error:', error);
+    }
+  };
+
+  const handleMoveToAnnotating = async (dataset) => {
+    try {
+      await projectsAPI.assignDatasetToAnnotating(projectId, dataset.id);
+      message.success(`Dataset "${dataset.name}" moved to annotating section`);
+      loadManagementData();
+    } catch (error) {
+      const errorInfo = handleAPIError(error);
+      message.error(`Failed to move dataset: ${errorInfo.message}`);
+      console.error('Move to annotating error:', error);
     }
   };
 
@@ -953,6 +991,21 @@ const ProjectWorkspace = () => {
             onClick: () => handleMoveToDataset(dataset)
           }
         );
+      } else if (status === 'completed') {
+        baseItems.push(
+          {
+            key: 'move-to-unassigned',
+            label: 'Move to Unassigned',
+            icon: <ClockCircleOutlined />,
+            onClick: () => handleMoveToUnassigned(dataset)
+          },
+          {
+            key: 'move-to-annotating',
+            label: 'Move to Annotating',
+            icon: <PlayCircleOutlined />,
+            onClick: () => handleMoveToAnnotating(dataset)
+          }
+        );
       }
 
       baseItems.push({
@@ -1361,12 +1414,38 @@ const ProjectWorkspace = () => {
             </Button>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Button 
-              icon={<SettingOutlined />}
-              block
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: 'view-settings',
+                    icon: <SettingOutlined />,
+                    label: 'Dataset Settings',
+                  },
+                  {
+                    key: 'delete-dataset',
+                    icon: <DeleteOutlined />,
+                    label: 'Delete Dataset',
+                    danger: true,
+                  },
+                ]
+              }}
+              onMenuClick={({ key }) => {
+                if (key === 'delete-dataset') {
+                  handleDeleteDataset();
+                } else if (key === 'view-settings') {
+                  // Handle dataset settings view
+                  message.info('Dataset settings coming soon!');
+                }
+              }}
             >
-              Dataset Settings
-            </Button>
+              <Button 
+                icon={<SettingOutlined />}
+                block
+              >
+                Dataset Settings
+              </Button>
+            </Dropdown>
           </Col>
         </Row>
       </Card>
