@@ -9,10 +9,8 @@ import ModelsModern from './pages/ModelsModern';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
 import ProjectWorkspace from './pages/ProjectWorkspace';
-import Datasets from './pages/Datasets';
-import DatasetDetailModern from './pages/DatasetDetailModern';
-import Annotate from './pages/Annotate';
-import ActiveLearningDashboard from './components/ActiveLearning/ActiveLearningDashboard';
+// Removed: Datasets, DatasetDetailModern, Annotate, ActiveLearningDashboard
+// These will be integrated into Projects
 
 const { Header, Content } = Layout;
 
@@ -35,10 +33,8 @@ function App() {
                 <Route path="/models" element={<ModelsModern />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/projects/:projectId" element={<ProjectDetail />} />
-                <Route path="/datasets" element={<Datasets />} />
-                <Route path="/datasets/:datasetId" element={<DatasetDetailModern />} />
-                <Route path="/annotate/:datasetId?" element={<Annotate />} />
-                <Route path="/active-learning" element={<ActiveLearningDashboard />} />
+                {/* Removed standalone routes: /datasets, /annotate, /active-learning */}
+                {/* These features will be integrated within project workflows */}
               </Routes>
             </Content>
           </Layout>
