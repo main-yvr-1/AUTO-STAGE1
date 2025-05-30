@@ -1214,3 +1214,113 @@ async def get_project_images(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get project images: {str(e)}")
+
+
+@router.put("/{project_id}/datasets/{dataset_id}/move-to-unassigned")
+async def move_dataset_to_unassigned(
+    project_id: str,
+    dataset_id: str,
+    db: Session = Depends(get_db)
+):
+    """Move a dataset from annotating back to unassigned status"""
+    try:
+        # Verify project exists
+        project = ProjectOperations.get_project(db, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Verify dataset exists and belongs to project
+        dataset = DatasetOperations.get_dataset(db, dataset_id)
+        if not dataset or dataset.project_id != int(project_id):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Move physical files from annotating to unassigned
+        project_folder = os.path.join("uploads", "projects", project.name)
+        annotating_folder = os.path.join(project_folder, "annotating", dataset.name)
+        unassigned_folder = os.path.join(project_folder, "unassigned", dataset.name)
+        
+        if os.path.exists(annotating_folder):
+            # Create unassigned directory if it doesn't exist
+            os.makedirs(os.path.dirname(unassigned_folder), exist_ok=True)
+            
+            # Move the entire dataset folder
+            shutil.move(annotating_folder, unassigned_folder)
+            print(f"Moved dataset folder: {annotating_folder} -> {unassigned_folder}")
+            
+            # Update file paths in database
+            images = ImageOperations.get_images_by_dataset(db, dataset_id, skip=0, limit=10000)
+            for image in images:
+                old_path = image.file_path
+                new_path = old_path.replace("/annotating/", "/unassigned/")
+                ImageOperations.update_image_path(db, image.id, new_path)
+                print(f"Updated image path: {old_path} -> {new_path}")
+        
+        # Update dataset to unassigned status (labeled_images = 0)
+        updated_dataset = DatasetOperations.update_dataset(
+            db,
+            dataset_id,
+            labeled_images=0,
+            unlabeled_images=dataset.total_images
+        )
+        
+        return {"message": f"Dataset '{dataset.name}' moved to unassigned", "dataset": updated_dataset}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to move dataset to unassigned: {str(e)}")
+
+
+@router.put("/{project_id}/datasets/{dataset_id}/move-to-completed")
+async def move_dataset_to_completed(
+    project_id: str,
+    dataset_id: str,
+    db: Session = Depends(get_db)
+):
+    """Move a dataset from annotating to completed/dataset status"""
+    try:
+        # Verify project exists
+        project = ProjectOperations.get_project(db, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Verify dataset exists and belongs to project
+        dataset = DatasetOperations.get_dataset(db, dataset_id)
+        if not dataset or dataset.project_id != int(project_id):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        
+        # Move physical files from annotating to dataset
+        project_folder = os.path.join("uploads", "projects", project.name)
+        annotating_folder = os.path.join(project_folder, "annotating", dataset.name)
+        dataset_folder = os.path.join(project_folder, "dataset", dataset.name)
+        
+        if os.path.exists(annotating_folder):
+            # Create dataset directory if it doesn't exist
+            os.makedirs(os.path.dirname(dataset_folder), exist_ok=True)
+            
+            # Move the entire dataset folder
+            shutil.move(annotating_folder, dataset_folder)
+            print(f"Moved dataset folder: {annotating_folder} -> {dataset_folder}")
+            
+            # Update file paths in database
+            images = ImageOperations.get_images_by_dataset(db, dataset_id, skip=0, limit=10000)
+            for image in images:
+                old_path = image.file_path
+                new_path = old_path.replace("/annotating/", "/dataset/")
+                ImageOperations.update_image_path(db, image.id, new_path)
+                print(f"Updated image path: {old_path} -> {new_path}")
+        
+        # Update dataset to completed status (labeled_images = total_images)
+        updated_dataset = DatasetOperations.update_dataset(
+            db,
+            dataset_id,
+            labeled_images=dataset.total_images,
+            unlabeled_images=0
+        )
+        
+        return {"message": f"Dataset '{dataset.name}' moved to completed", "dataset": updated_dataset}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to move dataset to completed: {str(e)}")

@@ -276,6 +276,37 @@ const ProjectWorkspace = () => {
     });
   };
 
+  const handleStartAnnotating = (dataset) => {
+    // Navigate to annotation page for this specific dataset
+    message.info(`Starting annotation for "${dataset.name}"`);
+    // You can implement navigation to annotation interface here
+    // navigate(`/projects/${projectId}/annotate/${dataset.id}`);
+  };
+
+  const handleMoveToUnassigned = async (dataset) => {
+    try {
+      await projectsAPI.moveDatasetToUnassigned(projectId, dataset.id);
+      message.success(`Dataset "${dataset.name}" moved to unassigned`);
+      loadManagementData();
+    } catch (error) {
+      const errorInfo = handleAPIError(error);
+      message.error(`Failed to move dataset: ${errorInfo.message}`);
+      console.error('Move to unassigned error:', error);
+    }
+  };
+
+  const handleMoveToDataset = async (dataset) => {
+    try {
+      await projectsAPI.moveDatasetToCompleted(projectId, dataset.id);
+      message.success(`Dataset "${dataset.name}" moved to dataset section`);
+      loadManagementData();
+    } catch (error) {
+      const errorInfo = handleAPIError(error);
+      message.error(`Failed to move dataset: ${errorInfo.message}`);
+      console.error('Move to dataset error:', error);
+    }
+  };
+
   // Upload a single file
   const uploadFile = async (file, batchNameToUse) => {
     try {
@@ -896,22 +927,46 @@ const ProjectWorkspace = () => {
       return Math.round((dataset.labeled_images / dataset.total_images) * 100);
     };
 
-    // Dropdown menu items for three dots
-    const menuItems = [
-      {
-        key: 'rename',
-        label: 'Rename',
-        icon: <EditOutlined />,
-        onClick: () => handleRenameDataset(dataset)
-      },
-      {
+    // Dropdown menu items for three dots - different based on status
+    const getMenuItems = () => {
+      const baseItems = [
+        {
+          key: 'rename',
+          label: 'Rename',
+          icon: <EditOutlined />,
+          onClick: () => handleRenameDataset(dataset)
+        }
+      ];
+
+      if (status === 'annotating') {
+        baseItems.push(
+          {
+            key: 'move-to-unassigned',
+            label: 'Move to Unassigned',
+            icon: <ClockCircleOutlined />,
+            onClick: () => handleMoveToUnassigned(dataset)
+          },
+          {
+            key: 'move-to-dataset',
+            label: 'Move to Dataset',
+            icon: <CheckCircleOutlined />,
+            onClick: () => handleMoveToDataset(dataset)
+          }
+        );
+      }
+
+      baseItems.push({
         key: 'delete',
         label: 'Delete',
         icon: <DeleteOutlined />,
         danger: true,
         onClick: () => handleDeleteDataset(dataset)
-      }
-    ];
+      });
+
+      return baseItems;
+    };
+
+    const menuItems = getMenuItems();
 
     return (
       <Card
@@ -1002,6 +1057,18 @@ const ProjectWorkspace = () => {
               Assign to Annotating
             </Button>
           )}
+          {status === 'annotating' && (
+            <Button 
+              type="primary" 
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleStartAnnotating(dataset);
+              }}
+            >
+              Start Annotating
+            </Button>
+          )}
         </div>
       </Card>
     );
@@ -1037,9 +1104,6 @@ const ProjectWorkspace = () => {
             </div>
           </div>
           <div style={{ display: 'flex', gap: '12px' }}>
-            <Button icon={<SettingOutlined />}>
-              Roboflow Labeling
-            </Button>
             <Button type="primary" icon={<PlusOutlined />}>
               New Version
             </Button>

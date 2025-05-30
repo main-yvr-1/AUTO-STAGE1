@@ -164,6 +164,18 @@ export const projectsAPI = {
     const response = await api.delete(`/api/v1/projects/${projectId}/datasets/${datasetId}`);
     return response.data;
   },
+
+  // Move dataset to unassigned
+  moveDatasetToUnassigned: async (projectId, datasetId) => {
+    const response = await api.put(`/api/v1/projects/${projectId}/datasets/${datasetId}/move-to-unassigned`);
+    return response.data;
+  },
+
+  // Move dataset to completed/dataset section
+  moveDatasetToCompleted: async (projectId, datasetId) => {
+    const response = await api.put(`/api/v1/projects/${projectId}/datasets/${datasetId}/move-to-completed`);
+    return response.data;
+  },
 };
 
 // ==================== DATASETS API ====================

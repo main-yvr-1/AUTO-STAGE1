@@ -8,12 +8,15 @@ from sqlalchemy import and_, or_, func, desc
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
+import os
+from pathlib import Path
 
 from .models import (
     Project, Dataset, Image, Annotation, 
     ModelUsage, ExportJob, AutoLabelJob,
     DataAugmentation, DatasetSplit, LabelAnalytics
 )
+from core.config import settings
 
 
 class ProjectOperations:
@@ -41,6 +44,13 @@ class ProjectOperations:
         db.add(project)
         db.commit()
         db.refresh(project)
+        
+        # Create project folder structure
+        project_dir = settings.UPLOAD_DIR / "projects" / name
+        for folder in ["unassigned", "annotating", "dataset"]:
+            folder_path = project_dir / folder
+            folder_path.mkdir(parents=True, exist_ok=True)
+        
         return project
     
     @staticmethod
