@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Layout,
@@ -99,8 +99,12 @@ const ProjectWorkspace = () => {
   const [batchName, setBatchName] = useState('');
   const [tags, setTags] = useState([]);
   const [uploadedFiles, setUploadedFiles] = useState([]);
-  const [fileInputRef, setFileInputRef] = useState(null);
-  const [folderInputRef, setFolderInputRef] = useState(null);
+  const [availableDatasets, setAvailableDatasets] = useState([]);
+  const [batchNameModalVisible, setBatchNameModalVisible] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [uploadType, setUploadType] = useState('files'); // 'files' or 'folder'
+  const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
   const [recentImages, setRecentImages] = useState([]);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [managementData, setManagementData] = useState(null);
@@ -111,16 +115,52 @@ const ProjectWorkspace = () => {
   const [renamingDataset, setRenamingDataset] = useState(null);
   const [newDatasetName, setNewDatasetName] = useState('');
 
-  // Handle file selection
-  const handleFileSelect = () => {
-    if (fileInputRef) {
-      fileInputRef.click();
+  // Load available datasets for tags dropdown (only unassigned datasets)
+  const loadAvailableDatasets = async () => {
+    try {
+      if (managementData && managementData.unassigned && managementData.unassigned.datasets) {
+        const datasets = managementData.unassigned.datasets.map(dataset => ({
+          label: dataset.name,
+          value: dataset.name
+        }));
+        setAvailableDatasets(datasets);
+      }
+    } catch (error) {
+      console.error('Error loading datasets:', error);
     }
   };
 
+  // Handle file selection - ask for batch name
+  const handleFileSelect = () => {
+    setUploadType('files');
+    // Only show batch name modal if no tags are selected
+    if (tags.length === 0) {
+      setBatchNameModalVisible(true);
+    } else {
+      // Tags are selected, proceed directly to file selection
+      if (fileInputRef.current) {
+        fileInputRef.current.click();
+      }
+    }
+  };
+
+  // Handle folder selection - auto-use folder name
   const handleFolderSelect = () => {
-    if (folderInputRef) {
-      folderInputRef.click();
+    setUploadType('folder');
+    if (folderInputRef.current) {
+      folderInputRef.current.click();
+    }
+  };
+
+  // Handle batch name confirmation for file uploads
+  const handleBatchNameConfirm = () => {
+    if (!batchName.trim()) {
+      message.error('Batch name cannot be empty');
+      return;
+    }
+    setBatchNameModalVisible(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
     }
   };
 
@@ -159,12 +199,19 @@ const ProjectWorkspace = () => {
     }
   };
 
-  // Load management data when switching to management tab
+  // Load management data when component mounts and when switching to management tab
   useEffect(() => {
-    if (projectId && selectedKey === 'management') {
+    if (projectId) {
       loadManagementData();
     }
-  }, [projectId, selectedKey]);
+  }, [projectId]);
+
+  // Load available datasets when management data changes
+  useEffect(() => {
+    if (managementData) {
+      loadAvailableDatasets();
+    }
+  }, [managementData]);
 
   // Dataset management functions
   const handleAssignToAnnotating = async (dataset) => {
@@ -229,53 +276,186 @@ const ProjectWorkspace = () => {
     });
   };
 
+  const handleStartAnnotating = (dataset) => {
+    // Navigate to annotation page for this specific dataset
+    message.info(`Starting annotation for "${dataset.name}"`);
+    // You can implement navigation to annotation interface here
+    // navigate(`/projects/${projectId}/annotate/${dataset.id}`);
+  };
+
+  const handleMoveToUnassigned = async (dataset) => {
+    try {
+      await projectsAPI.moveDatasetToUnassigned(projectId, dataset.id);
+      message.success(`Dataset "${dataset.name}" moved to unassigned`);
+      loadManagementData();
+    } catch (error) {
+      const errorInfo = handleAPIError(error);
+      message.error(`Failed to move dataset: ${errorInfo.message}`);
+      console.error('Move to unassigned error:', error);
+    }
+  };
+
+  const handleMoveToDataset = async (dataset) => {
+    try {
+      await projectsAPI.moveDatasetToCompleted(projectId, dataset.id);
+      message.success(`Dataset "${dataset.name}" moved to dataset section`);
+      loadManagementData();
+    } catch (error) {
+      const errorInfo = handleAPIError(error);
+      message.error(`Failed to move dataset: ${errorInfo.message}`);
+      console.error('Move to dataset error:', error);
+    }
+  };
+
+  // Upload a single file
+  const uploadFile = async (file, batchNameToUse) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('batch_name', batchNameToUse);
+      if (tags.length > 0) {
+        formData.append('tags', JSON.stringify(tags));
+      }
+
+      const response = await fetch(`/api/v1/projects/${projectId}/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+        },
+        body: formData,
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        message.success(`${file.name} uploaded successfully to "${batchNameToUse}"!`);
+        return result;
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Upload failed: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      message.error(`Failed to upload ${file.name}: ${error.message}`);
+      throw error;
+    }
+  };
+
+  // Upload multiple files in bulk
+  const uploadMultipleFiles = async (files, batchNameToUse) => {
+    try {
+      const formData = new FormData();
+      
+      // Add all files to FormData
+      files.forEach(file => {
+        formData.append('files', file);
+      });
+      
+      formData.append('batch_name', batchNameToUse);
+      if (tags.length > 0) {
+        formData.append('tags', JSON.stringify(tags));
+      }
+
+      const response = await fetch(`/api/v1/projects/${projectId}/upload-bulk`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+        },
+        body: formData,
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const successCount = result.results?.successful_uploads || 0;
+        const totalCount = result.results?.total_files || files.length;
+        
+        if (successCount === totalCount) {
+          message.success(`All ${successCount} files uploaded successfully to "${batchNameToUse}"!`);
+        } else {
+          message.warning(`${successCount} of ${totalCount} files uploaded successfully to "${batchNameToUse}"`);
+          if (result.results?.errors?.length > 0) {
+            result.results.errors.forEach(error => {
+              message.error(error);
+            });
+          }
+        }
+        return result;
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Upload failed: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Bulk upload error:', error);
+      message.error(`Failed to upload files: ${error.message}`);
+      throw error;
+    }
+  };
+
+  // State to collect files for bulk upload
+  const [uploadTimeout, setUploadTimeout] = useState(null);
+
   // Upload configuration
   const uploadProps = {
     name: 'files',
     multiple: true,
     customRequest: async ({ file, onSuccess, onError, onProgress }) => {
-      try {
-        setUploading(true);
-        setUploadProgress(0);
+      // Add file to pending list and delay upload to collect multiple files
+      setPendingFiles(prev => {
+        const newFiles = [...prev, { file, onSuccess, onError, onProgress }];
         
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('batch_name', batchName || `Uploaded on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`);
-        formData.append('tags', JSON.stringify(tags));
-
-        // Simulate progress for better UX
-        const progressInterval = setInterval(() => {
-          setUploadProgress(prev => Math.min(prev + 10, 90));
-        }, 100);
-
-        const response = await fetch(`/api/v1/projects/${projectId}/upload`, {
-          method: 'POST',
-          body: formData,
-        });
-
-        clearInterval(progressInterval);
-        setUploadProgress(100);
-
-        if (response.ok) {
-          const result = await response.json();
-          setUploadedFiles(prev => [...prev, { ...result, file }]);
-          onSuccess(result);
-          message.success(`${file.name} uploaded successfully!`);
-          
-          // Reload recent images and project stats
-          loadRecentImages();
-          loadProject();
-        } else {
-          throw new Error(`Upload failed: ${response.statusText}`);
+        // Clear existing timeout
+        if (uploadTimeout) {
+          clearTimeout(uploadTimeout);
         }
-      } catch (error) {
-        console.error('Upload error:', error);
-        onError(error);
-        message.error(`Failed to upload ${file.name}: ${error.message}`);
-      } finally {
-        setUploading(false);
-        setUploadProgress(0);
-      }
+        
+        // Set new timeout to upload after 500ms of no new files
+        const newTimeout = setTimeout(async () => {
+          try {
+            setUploading(true);
+            setUploadProgress(0);
+            
+            // Use current batch name or default
+            const batchNameToUse = batchName || `Uploaded on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`;
+
+            // Simulate progress for better UX
+            const progressInterval = setInterval(() => {
+              setUploadProgress(prev => Math.min(prev + 10, 90));
+            }, 100);
+
+            // Extract just the files for upload
+            const filesToUpload = newFiles.map(item => item.file);
+            const result = await uploadMultipleFiles(filesToUpload, batchNameToUse);
+
+            clearInterval(progressInterval);
+            setUploadProgress(100);
+
+            // Call success for all files
+            newFiles.forEach(item => {
+              item.onSuccess(result);
+            });
+            
+            setUploadedFiles(prev => [...prev, ...newFiles.map(item => ({ ...result, file: item.file }))]);
+            
+            // Reload recent images and project stats
+            loadRecentImages();
+            loadProject();
+            loadManagementData(); // Reload to update datasets list
+            
+            // Clear pending files
+            setPendingFiles([]);
+          } catch (error) {
+            // Call error for all files
+            newFiles.forEach(item => {
+              item.onError(error);
+            });
+          } finally {
+            setUploading(false);
+            setUploadProgress(0);
+          }
+        }, 500);
+        
+        setUploadTimeout(newTimeout);
+        return newFiles;
+      });
     },
     accept: '.jpg,.jpeg,.png,.bmp,.webp,.avif',
     beforeUpload: (file) => {
@@ -407,8 +587,18 @@ const ProjectWorkspace = () => {
             <Input 
               placeholder={`Uploaded on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`}
               value={batchName}
-              onChange={(e) => setBatchName(e.target.value)}
-              style={{ marginBottom: '16px' }}
+              onChange={(e) => {
+                setBatchName(e.target.value);
+                // Clear tags when batch name is entered
+                if (e.target.value.trim() && tags.length > 0) {
+                  setTags([]);
+                }
+              }}
+              disabled={tags.length > 0}
+              style={{ 
+                marginBottom: '16px',
+                opacity: tags.length > 0 ? 0.6 : 1
+              }}
             />
           </Col>
           <Col span={12}>
@@ -419,81 +609,131 @@ const ProjectWorkspace = () => {
               </Text>
             </div>
             <Select
-              mode="tags"
-              style={{ width: '100%' }}
-              placeholder="Search or add tags for images..."
+              mode="multiple"
+              style={{ 
+                width: '100%',
+                opacity: batchName.trim() ? 0.6 : 1
+              }}
+              placeholder="Select existing dataset or leave empty for new batch..."
               value={tags}
-              onChange={setTags}
-              tokenSeparators={[',']}
+              onChange={(selectedTags) => {
+                setTags(selectedTags);
+                // Clear batch name when tags are selected
+                if (selectedTags.length > 0 && batchName.trim()) {
+                  setBatchName('');
+                }
+              }}
+              options={availableDatasets}
+              allowClear
+              disabled={batchName.trim() !== ''}
             />
           </Col>
         </Row>
       </Card>
 
       <Card>
-        <Dragger {...uploadProps} style={{ marginBottom: '24px' }}>
+        <Dragger {...uploadProps} style={{ marginBottom: '16px' }}>
           <p className="ant-upload-drag-icon">
             <InboxOutlined style={{ fontSize: '48px', color: '#1890ff' }} />
           </p>
           <p className="ant-upload-text" style={{ fontSize: '18px', fontWeight: 500 }}>
             Drag and drop file(s) to upload, or:
           </p>
-          <div style={{ marginTop: '16px' }}>
-            <Button 
-              type="primary" 
-              icon={<FolderOutlined />} 
-              style={{ marginRight: '8px' }}
-              onClick={handleFileSelect}
-            >
-              Select File(s)
-            </Button>
-            <Button 
-              icon={<FolderOutlined />}
-              onClick={handleFolderSelect}
-            >
-              Select Folder
-            </Button>
-            
-            {/* Hidden file inputs */}
-            <input
-              type="file"
-              ref={setFileInputRef}
-              style={{ display: 'none' }}
-              multiple
-              accept=".jpg,.jpeg,.png,.bmp,.webp,.avif"
-              onChange={(e) => {
-                const files = Array.from(e.target.files);
-                files.forEach(file => {
-                  uploadProps.customRequest({
-                    file,
-                    onSuccess: () => {},
-                    onError: () => {},
-                    onProgress: () => {}
-                  });
-                });
-              }}
-            />
-            <input
-              type="file"
-              ref={setFolderInputRef}
-              style={{ display: 'none' }}
-              webkitdirectory=""
-              multiple
-              accept=".jpg,.jpeg,.png,.bmp,.webp,.avif"
-              onChange={(e) => {
-                const files = Array.from(e.target.files);
-                files.forEach(file => {
-                  uploadProps.customRequest({
-                    file,
-                    onSuccess: () => {},
-                    onError: () => {},
-                    onProgress: () => {}
-                  });
-                });
-              }}
-            />
-          </div>
         </Dragger>
+        
+        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+          <Button 
+            type="primary" 
+            icon={<FolderOutlined />} 
+            style={{ marginRight: '8px' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleFileSelect();
+            }}
+          >
+            Select File(s)
+          </Button>
+          <Button 
+            icon={<FolderOutlined />}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleFolderSelect();
+            }}
+          >
+            Select Folder
+          </Button>
+          
+          {/* Hidden file inputs */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            multiple
+            accept=".jpg,.jpeg,.png,.bmp,.webp,.avif"
+            onChange={async (e) => {
+              const files = Array.from(e.target.files);
+              if (files.length === 0) return;
+
+              setUploading(true);
+              const batchNameToUse = batchName || `Uploaded on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`;
+              
+              try {
+                for (const file of files) {
+                  await uploadFile(file, batchNameToUse);
+                }
+                
+                // Reload data after all uploads
+                loadProject();
+                loadRecentImages();
+                loadManagementData();
+                message.success(`${files.length} file(s) uploaded successfully to "${batchNameToUse}"!`);
+              } catch (error) {
+                console.error('Batch upload error:', error);
+              } finally {
+                setUploading(false);
+                // Clear the input value to allow re-uploading the same file
+                e.target.value = '';
+              }
+            }}
+          />
+          <input
+            type="file"
+            ref={folderInputRef}
+            style={{ display: 'none' }}
+            webkitdirectory=""
+            multiple
+            accept=".jpg,.jpeg,.png,.bmp,.webp,.avif"
+            onChange={async (e) => {
+              const files = Array.from(e.target.files);
+              if (files.length === 0) return;
+
+              // Extract folder name from the first file's path
+              const firstFile = files[0];
+              const pathParts = firstFile.webkitRelativePath.split('/');
+              const folderName = pathParts[0] || `Folder_${new Date().toLocaleDateString()}`;
+              
+              setUploading(true);
+              
+              try {
+                for (const file of files) {
+                  await uploadFile(file, folderName);
+                }
+                
+                // Reload data after all uploads
+                loadProject();
+                loadRecentImages();
+                loadManagementData();
+                message.success(`${files.length} file(s) uploaded successfully to "${folderName}"!`);
+              } catch (error) {
+                console.error('Folder upload error:', error);
+              } finally {
+                setUploading(false);
+                // Clear the input value to allow re-uploading the same folder
+                e.target.value = '';
+              }
+            }}
+          />
+        </div>
 
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
           <Title level={4} style={{ color: '#666' }}>Supported Formats</Title>
@@ -687,22 +927,46 @@ const ProjectWorkspace = () => {
       return Math.round((dataset.labeled_images / dataset.total_images) * 100);
     };
 
-    // Dropdown menu items for three dots
-    const menuItems = [
-      {
-        key: 'rename',
-        label: 'Rename',
-        icon: <EditOutlined />,
-        onClick: () => handleRenameDataset(dataset)
-      },
-      {
+    // Dropdown menu items for three dots - different based on status
+    const getMenuItems = () => {
+      const baseItems = [
+        {
+          key: 'rename',
+          label: 'Rename',
+          icon: <EditOutlined />,
+          onClick: () => handleRenameDataset(dataset)
+        }
+      ];
+
+      if (status === 'annotating') {
+        baseItems.push(
+          {
+            key: 'move-to-unassigned',
+            label: 'Move to Unassigned',
+            icon: <ClockCircleOutlined />,
+            onClick: () => handleMoveToUnassigned(dataset)
+          },
+          {
+            key: 'move-to-dataset',
+            label: 'Move to Dataset',
+            icon: <CheckCircleOutlined />,
+            onClick: () => handleMoveToDataset(dataset)
+          }
+        );
+      }
+
+      baseItems.push({
         key: 'delete',
         label: 'Delete',
         icon: <DeleteOutlined />,
         danger: true,
         onClick: () => handleDeleteDataset(dataset)
-      }
-    ];
+      });
+
+      return baseItems;
+    };
+
+    const menuItems = getMenuItems();
 
     return (
       <Card
@@ -793,6 +1057,18 @@ const ProjectWorkspace = () => {
               Assign to Annotating
             </Button>
           )}
+          {status === 'annotating' && (
+            <Button 
+              type="primary" 
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleStartAnnotating(dataset);
+              }}
+            >
+              Start Annotating
+            </Button>
+          )}
         </div>
       </Card>
     );
@@ -828,9 +1104,6 @@ const ProjectWorkspace = () => {
             </div>
           </div>
           <div style={{ display: 'flex', gap: '12px' }}>
-            <Button icon={<SettingOutlined />}>
-              Roboflow Labeling
-            </Button>
             <Button type="primary" icon={<PlusOutlined />}>
               New Version
             </Button>
@@ -927,22 +1200,176 @@ const ProjectWorkspace = () => {
     <div style={{ padding: '24px' }}>
       <Title level={2}>
         <DatabaseOutlined style={{ marginRight: '8px' }} />
-        Dataset
+        Dataset Management
       </Title>
-      <Alert
-        message="Dataset Management"
-        description="View and manage your project datasets."
-        type="info"
-        showIcon
-        style={{ marginBottom: '24px' }}
-      />
-      <Button 
-        type="primary" 
-        size="large"
-        onClick={() => navigate(`/datasets?project=${projectId}`)}
-      >
-        View Datasets
-      </Button>
+      
+      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
+        <Col xs={24} sm={12} lg={8}>
+          <Card>
+            <Statistic
+              title="Total Images"
+              value={project?.total_images || 0}
+              prefix={<PictureOutlined />}
+              valueStyle={{ color: '#1890ff' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={8}>
+          <Card>
+            <Statistic
+              title="Labeled Images"
+              value={project?.labeled_images || 0}
+              prefix={<TagOutlined />}
+              valueStyle={{ color: '#52c41a' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={8}>
+          <Card>
+            <Statistic
+              title="Progress"
+              value={project?.total_images > 0 ? Math.round((project?.labeled_images || 0) / project.total_images * 100) : 0}
+              suffix="%"
+              prefix={<CheckCircleOutlined />}
+              valueStyle={{ color: '#722ed1' }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card title="Upload New Images" style={{ marginBottom: '24px' }}>
+        <Upload.Dragger
+          name="file"
+          multiple
+          accept="image/*,.jpg,.jpeg,.png,.gif,.bmp,.webp"
+          directory={false}
+          showUploadList={true}
+          action={`http://localhost:12000/api/v1/projects/${projectId}/upload`}
+          headers={{
+            'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+          }}
+          onChange={(info) => {
+            const { status } = info.file;
+            if (status !== 'uploading') {
+              console.log(info.file, info.fileList);
+            }
+            if (status === 'done') {
+              message.success(`${info.file.name} uploaded successfully.`);
+              // Reload project data to update statistics
+              loadProject();
+            } else if (status === 'error') {
+              message.error(`${info.file.name} upload failed.`);
+            }
+          }}
+          onDrop={(e) => {
+            console.log('Dropped files', e.dataTransfer.files);
+          }}
+        >
+          <p className="ant-upload-drag-icon">
+            <InboxOutlined />
+          </p>
+          <p className="ant-upload-text">Click or drag images to upload</p>
+          <p className="ant-upload-hint">
+            Support for single or bulk upload. Accepts JPG, PNG, GIF, BMP, WebP formats.
+          </p>
+        </Upload.Dragger>
+        
+        <div style={{ marginTop: '16px' }}>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} sm={12}>
+              <Upload
+                name="file"
+                multiple
+                accept="image/*"
+                showUploadList={false}
+                action={`http://localhost:12000/api/v1/projects/${projectId}/upload`}
+                headers={{
+                  'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+                }}
+                onChange={(info) => {
+                  if (info.file.status === 'done') {
+                    message.success(`${info.file.name} uploaded successfully.`);
+                    loadProject();
+                  } else if (info.file.status === 'error') {
+                    message.error(`${info.file.name} upload failed.`);
+                  }
+                }}
+              >
+                <Button type="primary" icon={<UploadOutlined />} block>
+                  Select Files
+                </Button>
+              </Upload>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Upload
+                name="file"
+                multiple
+                directory
+                accept="image/*"
+                showUploadList={false}
+                action={`http://localhost:12000/api/v1/projects/${projectId}/upload`}
+                headers={{
+                  'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+                }}
+                onChange={(info) => {
+                  if (info.file.status === 'done') {
+                    message.success(`${info.file.name} uploaded successfully.`);
+                    loadProject();
+                  } else if (info.file.status === 'error') {
+                    message.error(`${info.file.name} upload failed.`);
+                  }
+                }}
+              >
+                <Button icon={<FolderOutlined />} block>
+                  Select Folder
+                </Button>
+              </Upload>
+            </Col>
+          </Row>
+        </div>
+      </Card>
+
+      <Card title="Dataset Actions">
+        <Row gutter={[16, 16]}>
+          <Col xs={24} sm={12} lg={6}>
+            <Button 
+              type="primary" 
+              icon={<TagOutlined />}
+              block
+              onClick={() => {
+                // Navigate to annotation interface for this project
+                navigate(`/projects/${projectId}/annotate`);
+              }}
+            >
+              Start Annotating
+            </Button>
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <Button 
+              icon={<ExportOutlined />}
+              block
+            >
+              Export Dataset
+            </Button>
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <Button 
+              icon={<EyeOutlined />}
+              block
+            >
+              View Images
+            </Button>
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <Button 
+              icon={<SettingOutlined />}
+              block
+            >
+              Dataset Settings
+            </Button>
+          </Col>
+        </Row>
+      </Card>
     </div>
   );
 
@@ -1198,6 +1625,27 @@ const ProjectWorkspace = () => {
           value={newDatasetName}
           onChange={(e) => setNewDatasetName(e.target.value)}
           onPressEnter={handleRenameConfirm}
+        />
+      </Modal>
+
+      {/* Batch Name Modal */}
+      <Modal
+        title="Enter Batch Name"
+        open={batchNameModalVisible}
+        onOk={handleBatchNameConfirm}
+        onCancel={() => {
+          setBatchNameModalVisible(false);
+          setBatchName('');
+        }}
+        okText="Continue"
+        cancelText="Cancel"
+      >
+        <Input
+          placeholder="Enter batch name for uploaded files"
+          value={batchName}
+          onChange={(e) => setBatchName(e.target.value)}
+          onPressEnter={handleBatchNameConfirm}
+          autoFocus
         />
       </Modal>
     </Layout>
